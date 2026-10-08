@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: safe-action-mcp
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: SAFE_ACTION_HOST
+        value: 0.0.0.0
+      - key: SAFE_ACTION_DB
+        value: /tmp/safe-action.db

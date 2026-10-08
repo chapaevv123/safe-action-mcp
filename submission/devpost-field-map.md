@@ -11,5 +11,6 @@
 | Product feedback | `product-feedback.md` |
 | Video | record from `video-script-180s.md`; upload manually |
 | Repository | `https://github.com/chapaevv123/safe-action-mcp` after owner-authorized publication |
+| Public demo | Pending deployment; copy the exact URL only after public smoke verification |
 | Track | Alexa+ |
 | Mini-challenge | Open Source, if the primary repository is public and submitted as the qualifying new project |

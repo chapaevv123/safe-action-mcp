@@ -1,0 +1,12 @@
+.git
+.venv
+.clean-venv
+.pytest_cache
+__pycache__
+*.pyc
+*.egg-info
+artifacts/runtime
+screenshots
+tests
+docs
+submission

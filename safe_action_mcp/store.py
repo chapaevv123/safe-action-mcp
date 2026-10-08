@@ -89,6 +89,11 @@ class LocalStore:
     def cancel_hold(self, hold_id: str) -> SimulatorResult:
         self.get_hold(hold_id); self.db.execute("UPDATE holds SET status='CANCELLED' WHERE hold_id=?",(hold_id,)); self.db.commit(); return self.get_hold(hold_id)
 
+    def hold_workflow(self, hold_id: str) -> str:
+        row=self.db.execute("SELECT workflow_id FROM holds WHERE hold_id=?",(hold_id,)).fetchone()
+        if not row: raise KeyError("HOLD_NOT_FOUND")
+        return row["workflow_id"]
+
     def append_event(self, event: WorkflowEvent) -> bool:
         try:
             self.db.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?)",(event.event_id,event.workflow_id,event.sequence,event.event_type,event.occurred_at,event.payload_hash,json.dumps(event.payload,sort_keys=True),event.dedupe_key)); self.db.commit(); return True
@@ -101,6 +106,18 @@ class LocalStore:
 
     def hold_count(self) -> int:
         return self.db.execute("SELECT count(*) FROM holds").fetchone()[0]
+
+    def reset_workflow(self, workflow_id: str) -> dict[str,int]:
+        activity_rows=self.db.execute("SELECT activity_id,bound_action_id FROM activities WHERE workflow_id=?",(workflow_id,)).fetchall()
+        bound_ids=tuple({r["bound_action_id"] for r in activity_rows})
+        counts={"holds":self.db.execute("SELECT count(*) FROM holds WHERE workflow_id=?",(workflow_id,)).fetchone()[0],
+                "activities":len(activity_rows),"events":self.db.execute("SELECT count(*) FROM events WHERE workflow_id=?",(workflow_id,)).fetchone()[0]}
+        self.db.execute("DELETE FROM holds WHERE workflow_id=?",(workflow_id,))
+        self.db.execute("DELETE FROM activities WHERE workflow_id=?",(workflow_id,))
+        self.db.execute("DELETE FROM events WHERE workflow_id=?",(workflow_id,))
+        if bound_ids:
+            marks=','.join('?' for _ in bound_ids); self.db.execute(f"DELETE FROM consent_usage WHERE bound_action_id IN ({marks})",bound_ids)
+        self.db.commit(); return counts
 
     def verify_result(self, workflow_id: str, args: AppointmentArgs, bound: BoundActionRef,
                       result: SimulatorResult, activity_id: str) -> ActivityRef:

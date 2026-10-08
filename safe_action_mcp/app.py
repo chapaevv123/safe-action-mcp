@@ -17,7 +17,9 @@ from .store import LocalStore
 
 ROOT=Path(__file__).resolve().parents[1]
 DB_PATH=os.getenv("SAFE_ACTION_DB",str(ROOT/"artifacts"/"runtime"/"safe_action.db"))
-ALLOWED={x.strip() for x in os.getenv("SAFE_ACTION_ALLOWED_ORIGINS","http://127.0.0.1:8765,http://localhost:8765").split(",")}
+ALLOWED={x.strip() for x in os.getenv("SAFE_ACTION_ALLOWED_ORIGINS","http://127.0.0.1:8765,http://localhost:8765").split(",") if x.strip()}
+for public_origin in (os.getenv("SAFE_ACTION_PUBLIC_ORIGIN"),os.getenv("RENDER_EXTERNAL_URL")):
+    if public_origin: ALLOWED.add(public_origin.rstrip("/"))
 store=LocalStore(DB_PATH); engine=SafetyEngine(store); app=FastAPI(title="Safe Action MCP",version="1.0.0")
 sessions:dict[str,bool]={}; pending:dict[str,dict[str,Any]]={}
 
@@ -75,19 +77,24 @@ async def mcp(request:Request):
         mode=params.get("_demo",{}).get("mode","prepare"); key=str(params.get("_demo",{}).get("workflow_id",rid))
         try:
             if mode=="prepare":
-                prepared=engine.prepare(str(rid),args); pending[prepared["workflow_id"]]={"args":args,**prepared}
+                prepared=engine.prepare(sid,args); pending[prepared["workflow_id"]]={"session_id":sid,"args":args,**prepared}
                 result={k:(v.model_dump(mode="json") if hasattr(v,"model_dump") else v) for k,v in prepared.items()}
             elif mode=="approve":
-                wf=pending[key]; consent,bound=engine.approve(key,str(rid),"demo-owner",wf["args"],wf["admission"],wf["trust"]); wf.update(consent=consent,bound=bound)
+                wf=pending[key]
+                if wf["session_id"] != sid: raise ValueError("CROSS_SESSION_WORKFLOW_ACCESS")
+                consent,bound=engine.approve(key,sid,"demo-owner",wf["args"],wf["admission"],wf["trust"]); wf.update(consent=consent,bound=bound)
                 result={"workflow_id":key,"consent":consent.model_dump(mode="json"),"bound_action":bound.model_dump(mode="json")}
             elif mode in {"execute","crash"}:
                 wf=pending[key]; proposed=args
+                if wf["session_id"] != sid: raise ValueError("CROSS_SESSION_WORKFLOW_ACCESS")
                 from .core import materiality_diff
                 diff=materiality_diff(wf["args"],proposed)
                 if diff.material_changed: result={"status":"REJECTED","reason":"MATERIAL_ARGUMENTS_CHANGED","materiality_diff":diff.model_dump(mode="json")}
                 else: result=engine.execute(key,proposed,wf["consent"],wf["bound"],wf["admission"],wf["trust"],inject_crash=mode=="crash")
             elif mode=="replay":
-                wf=pending[key]; result=engine.replay(key,wf["args"],wf["consent"],wf["bound"],wf["admission"],wf["trust"])
+                wf=pending[key]
+                if wf["session_id"] != sid: raise ValueError("CROSS_SESSION_WORKFLOW_ACCESS")
+                result=engine.replay(key,wf["args"],wf["consent"],wf["bound"],wf["admission"],wf["trust"])
             else: return rpc_error(rid,-32602,"Unknown demo mode")
         except InjectedCrash: result={"status":"CRASH_INJECTED","workflow_id":key,"recoverable":True}
         except (KeyError,ValueError) as exc: result={"status":"REJECTED","reason":str(exc)}
@@ -96,11 +103,28 @@ async def mcp(request:Request):
     return rpc_error(rid,-32601,"Method not found")
 
 @app.post("/demo/cancel/{hold_id}")
-def cancel(hold_id:str):
-    try: return store.cancel_hold(hold_id).model_dump(mode="json")
+def cancel(hold_id:str,request:Request):
+    origin=request.headers.get("origin")
+    if origin and origin not in ALLOWED: return JSONResponse({"error":"ORIGIN_FORBIDDEN"},status_code=403)
+    try: workflow_id=store.hold_workflow(hold_id)
     except KeyError: return JSONResponse({"error":"HOLD_NOT_FOUND"},status_code=404)
+    sid=request.headers.get("mcp-session-id"); workflow=pending.get(workflow_id)
+    if not workflow or sid not in sessions or workflow.get("session_id") != sid:
+        return JSONResponse({"error":"HOLD_NOT_OWNED_BY_SESSION"},status_code=403)
+    return store.cancel_hold(hold_id).model_dump(mode="json")
+
+@app.post("/demo/reset/{workflow_id}")
+def reset_demo(workflow_id:str,request:Request):
+    origin=request.headers.get("origin")
+    if origin and origin not in ALLOWED: return JSONResponse({"error":"ORIGIN_FORBIDDEN"},status_code=403)
+    sid=request.headers.get("mcp-session-id")
+    workflow=pending.get(workflow_id)
+    if not workflow or sid not in sessions or workflow.get("session_id") != sid:
+        return JSONResponse({"error":"WORKFLOW_NOT_OWNED_BY_SESSION"},status_code=403)
+    counts=store.reset_workflow(workflow_id); pending.pop(workflow_id,None)
+    return {"status":"RESET","workflow_id":workflow_id,"removed":counts}
 
 def main():
-    uvicorn.run("safe_action_mcp.app:app",host=os.getenv("SAFE_ACTION_HOST","127.0.0.1"),port=int(os.getenv("SAFE_ACTION_PORT","8765")),reload=False)
+    uvicorn.run("safe_action_mcp.app:app",host=os.getenv("SAFE_ACTION_HOST","127.0.0.1"),port=int(os.getenv("PORT",os.getenv("SAFE_ACTION_PORT","8765"))),reload=False)
 
 if __name__=="__main__": main()

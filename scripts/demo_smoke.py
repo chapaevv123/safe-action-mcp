@@ -26,5 +26,6 @@ def main():
     assert init["result"]["protocolVersion"]=="2025-11-25" and tools["result"]["tools"][0]["name"]=="hold_service_appointment"
     assert rejected["result"]["structuredContent"]["status"]=="REJECTED" and crashed["result"]["structuredContent"]["status"]=="CRASH_INJECTED"
     assert replayed["result"]["structuredContent"]["workflow"]["terminal"] is True
-    print(json.dumps({"status":"PASS","workflow_id":w,"receipt":replayed["result"]["structuredContent"]["receipt"]["receipt_id"],"external_side_effects":0},indent=2))
+    reset=httpx.post(BASE+"/demo/reset/"+w,headers={"Origin":BASE,"Mcp-Session-Id":session_id},timeout=5); reset.raise_for_status(); assert reset.json()["status"]=="RESET"
+    print(json.dumps({"status":"PASS","workflow_id":w,"receipt":replayed["result"]["structuredContent"]["receipt"]["receipt_id"],"reset":"PASS","external_side_effects":0},indent=2))
 if __name__=="__main__": main()
