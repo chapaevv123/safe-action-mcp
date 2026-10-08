@@ -1,0 +1,1 @@
+Safe agent execution needs more than a confirmation modal. The system must describe tool risk independently, preserve the exact approved material arguments, separate workflow replay from effect execution, and verify the observed result. MCP supplies a clean interoperability boundary on which those controls can be composed.

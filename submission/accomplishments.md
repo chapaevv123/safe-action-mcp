@@ -1,0 +1,1 @@
+We built a real MCP lifecycle and tool flow, visible fail-closed evidence and trust checks, exact consent with field-level mutation rejection, a reversible simulator, deterministic crash recovery with exactly-one effect, result-to-action verification, reconciliation, a complete trace and receipt, and 40 deterministic tests.

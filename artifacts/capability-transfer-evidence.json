@@ -1,0 +1,23 @@
+{
+  "schema": "safe-action-capability-transfer-evidence/v1",
+  "project": "Safe Action MCP",
+  "status": "IMPLEMENTED_AND_TESTED_IN_TARGET",
+  "source_maturity": "VALIDATED_INTERNALIZED",
+  "transferred": [
+    "EvidenceContract", "EvidenceValidationResult", "EvidenceAdmissionResult",
+    "ReleaseTrustDecision", "DecisionReceipt", "BoundActionRef",
+    "DurableWorkflowState", "WorkflowEvent", "ActivityRef",
+    "PulseTraceContext", "ReconcileDecision"
+  ],
+  "new": [
+    "MCPToolRiskManifest", "CapabilityScopedConsent",
+    "ToolArgumentMaterialityDiff", "ReversibleToolSimulator",
+    "MCPResultBoundActionVerifier"
+  ],
+  "real_world_use": false,
+  "used_claim": false,
+  "reused_claim": false,
+  "proven_claim": false,
+  "money_realized": 0,
+  "external_side_effects": 0
+}

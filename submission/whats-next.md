@@ -1,0 +1,1 @@
+Next steps are authenticated owner identity, signed/versioned manifest authorities, multi-tenant isolation, durable server sessions, production-grade audit retention, and adapters for sandbox-only commerce or enterprise tools. Any real-world adapter would require a new security review and controlled-use evidence before enabling external effects.

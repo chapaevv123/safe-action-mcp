@@ -1,0 +1,1 @@
+Browser MCP client → FastAPI Streamable HTTP JSON-RPC endpoint → risk/evidence/trust engine → scoped consent and exact action binding → local SQLite simulator → append-only workflow events → deterministic replay → result verifier → desired/observed reconciliation → trace and receipt. Python 3.11+, FastAPI, Pydantic, SQLite, HTML/CSS/JavaScript; no cloud or paid service required.

@@ -1,0 +1,1 @@
+See [`docs/product-feedback.md`](../docs/product-feedback.md). Key request: an official self-hosted Alexa+ MCP conformance transcript and checker covering initialization, required headers, tools, origins, and submission runtime hooks.

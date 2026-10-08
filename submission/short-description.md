@@ -1,0 +1,1 @@
+Safe Action MCP is a self-hosted Alexa+ MCP execution firewall. It binds one consequential simulated tool call to fresh evidence, an exact owner-approved argument set, crash-safe replay, result verification, and an inspectable receipt—without making a real booking or payment.
