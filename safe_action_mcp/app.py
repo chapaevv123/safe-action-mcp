@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DB_PATH=os.getenv("SAFE_ACTION_DB",str(ROOT/"artifacts"/"runtime"/"safe_action.db"))
 ALLOWED={x.strip() for x in os.getenv("SAFE_ACTION_ALLOWED_ORIGINS","http://127.0.0.1:8765,http://localhost:8765").split(",")}
 store=LocalStore(DB_PATH); engine=SafetyEngine(store); app=FastAPI(title="Safe Action MCP",version="1.0.0")
-sessions:set[str]=set(); pending:dict[str,dict[str,Any]]={}
+sessions:dict[str,bool]={}; pending:dict[str,dict[str,Any]]={}
 
 TOOL_SCHEMA={"type":"object","additionalProperties":False,"required":["provider","service","date","time","quoted_price","currency","service_location_label"],"properties":{
  "provider":{"type":"string","minLength":2},"service":{"type":"string","minLength":2},"date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},
@@ -53,14 +54,18 @@ async def mcp(request:Request):
     except Exception: return rpc_error(None,-32700,"Parse error")
     if not isinstance(data,dict) or data.get("jsonrpc")!="2.0": return rpc_error(data.get("id") if isinstance(data,dict) else None,-32600,"Invalid Request")
     method=data.get("method"); rid=data.get("id"); params=data.get("params") or {}
-    if rid is None and method=="notifications/initialized": return Response(status_code=202)
-    if rid is None: return rpc_error(None,-32600,"Request ID required")
     if method=="initialize":
+        if rid is None: return rpc_error(None,-32600,"Request ID required")
         if params.get("protocolVersion")!=PROTOCOL_VERSION: return rpc_error(rid,-32602,"Unsupported protocol version",{"supported":[PROTOCOL_VERSION]})
-        sid="mcp_"+str(rid); sessions.add(sid)
+        sid="mcp_"+secrets.token_urlsafe(32); sessions[sid]=False
         response=JSONResponse({"jsonrpc":"2.0","id":rid,"result":{"protocolVersion":PROTOCOL_VERSION,"capabilities":{"tools":{"listChanged":False}},"serverInfo":{"name":"safe-action-mcp","version":"1.0.0"},"instructions":"All actions are local simulations and require exact owner consent."}})
         response.headers["Mcp-Session-Id"]=sid; return response
     if request.headers.get("mcp-protocol-version")!=PROTOCOL_VERSION: return rpc_error(rid,-32600,"MCP-Protocol-Version header required")
+    sid=request.headers.get("mcp-session-id")
+    if sid not in sessions: return rpc_error(rid,-32001,"Unknown or missing MCP session")
+    if rid is None and method=="notifications/initialized": sessions[sid]=True; return Response(status_code=202)
+    if rid is None: return rpc_error(None,-32600,"Request ID required")
+    if not sessions[sid]: return rpc_error(rid,-32002,"MCP session not initialized")
     if method=="tools/list":
         return {"jsonrpc":"2.0","id":rid,"result":{"tools":[{"name":TOOL_NAME,"title":"Hold a simulated home-service appointment","description":"Creates one reversible local-only simulated appointment hold after safety checks and owner consent.","inputSchema":TOOL_SCHEMA,"annotations":{"destructiveHint":False,"idempotentHint":True,"openWorldHint":False}}]}}
     if method=="tools/call":
@@ -73,16 +78,16 @@ async def mcp(request:Request):
                 prepared=engine.prepare(str(rid),args); pending[prepared["workflow_id"]]={"args":args,**prepared}
                 result={k:(v.model_dump(mode="json") if hasattr(v,"model_dump") else v) for k,v in prepared.items()}
             elif mode=="approve":
-                wf=pending[key]; consent,bound=engine.approve(key,str(rid),"demo-owner",wf["args"]); wf.update(consent=consent,bound=bound)
+                wf=pending[key]; consent,bound=engine.approve(key,str(rid),"demo-owner",wf["args"],wf["admission"],wf["trust"]); wf.update(consent=consent,bound=bound)
                 result={"workflow_id":key,"consent":consent.model_dump(mode="json"),"bound_action":bound.model_dump(mode="json")}
             elif mode in {"execute","crash"}:
                 wf=pending[key]; proposed=args
                 from .core import materiality_diff
                 diff=materiality_diff(wf["args"],proposed)
                 if diff.material_changed: result={"status":"REJECTED","reason":"MATERIAL_ARGUMENTS_CHANGED","materiality_diff":diff.model_dump(mode="json")}
-                else: result=engine.execute(key,proposed,wf["consent"],wf["bound"],inject_crash=mode=="crash")
+                else: result=engine.execute(key,proposed,wf["consent"],wf["bound"],wf["admission"],wf["trust"],inject_crash=mode=="crash")
             elif mode=="replay":
-                wf=pending[key]; result=engine.replay(key,wf["args"],wf["consent"],wf["bound"])
+                wf=pending[key]; result=engine.replay(key,wf["args"],wf["consent"],wf["bound"],wf["admission"],wf["trust"])
             else: return rpc_error(rid,-32602,"Unknown demo mode")
         except InjectedCrash: result={"status":"CRASH_INJECTED","workflow_id":key,"recoverable":True}
         except (KeyError,ValueError) as exc: result={"status":"REJECTED","reason":str(exc)}

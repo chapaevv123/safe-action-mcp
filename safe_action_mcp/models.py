@@ -115,6 +115,8 @@ class BoundActionRef(StrictModel):
     arguments_hash: str
     idempotency_key: str
     expires_at: str
+    evidence_admission_ref: str
+    trust_decision_ref: str
 
 
 class MaterialChange(StrictModel):
@@ -153,7 +155,9 @@ class DurableWorkflowState(StrictModel):
 
 class ActivityRef(StrictModel):
     activity_id: str
+    workflow_id: str
     bound_action_id: str
+    idempotency_key: str
     status: Literal["STARTED", "COMPLETED"]
     result_ref: str | None = None
 
@@ -173,7 +177,10 @@ class PulseTraceContext(StrictModel):
     span_id: str
     parent_span_id: str | None = None
     workflow_id: str
+    consent_id: str
     bound_action_id: str | None = None
+    activity_id: str | None = None
+    result_ref: str | None = None
     decision_receipt_id: str | None = None
 
 
@@ -190,7 +197,11 @@ class DecisionReceipt(StrictModel):
     workflow_id: str
     consent_id: str
     bound_action_id: str
+    evidence_admission_ref: str
+    trust_decision_ref: str
+    activity_id: str
     result_ref: str
+    reconcile_action: str
     trace_id: str
     reason_codes: tuple[str, ...]
     created_at: str

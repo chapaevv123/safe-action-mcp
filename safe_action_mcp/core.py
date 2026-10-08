@@ -12,6 +12,9 @@ EXPECTATIONS = (
     "date_time_valid", "no_external_adapter",
 )
 
+def evidence_contract(expectations: tuple[str, ...] = EXPECTATIONS) -> EvidenceContract:
+    return EvidenceContract(expectations=expectations)
+
 
 def make_manifest(now: datetime | None = None, version: int = 1) -> MCPToolRiskManifest:
     now = now or datetime.now(timezone.utc)
@@ -23,10 +26,10 @@ def make_manifest(now: datetime | None = None, version: int = 1) -> MCPToolRiskM
     return MCPToolRiskManifest(**body, manifest_hash=stable_hash(body))
 
 
-def validate_evidence(manifest: MCPToolRiskManifest | None, args: AppointmentArgs | None,
+def validate_evidence(contract: EvidenceContract, manifest: MCPToolRiskManifest | None, args: AppointmentArgs | None,
                       external_adapter: bool = False, now: datetime | None = None) -> EvidenceValidationResult:
     now = now or datetime.now(timezone.utc)
-    checks: list[tuple[str, bool | None, str]] = [
+    available: dict[str, tuple[bool | None, str]] = {name: (value, code) for name, value, code in [
         ("manifest_exists", True if manifest is not None else None, "MANIFEST_PRESENT"),
         ("tool_name_matches", None if not manifest else manifest.tool_name == TOOL_NAME, "TOOL_NAME_MATCH"),
         ("manifest_fresh", None if not manifest else datetime.fromisoformat(manifest.expires_at.replace("Z", "+00:00")) > now, "MANIFEST_FRESH"),
@@ -37,13 +40,18 @@ def validate_evidence(manifest: MCPToolRiskManifest | None, args: AppointmentArg
         ("quote_valid", None if not args else args.quoted_price > 0, "QUOTE_VALID"),
         ("date_time_valid", None if not args else bool(args.date and args.time), "DATE_TIME_VALID"),
         ("no_external_adapter", not external_adapter, "NO_EXTERNAL_ADAPTER"),
-    ]
+    ]}
+    unknown = set(contract.expectations) - set(available)
+    if unknown: raise ValueError("UNKNOWN_EVIDENCE_EXPECTATION:" + ",".join(sorted(unknown)))
+    checks = [(name, *available[name]) for name in contract.expectations]
     findings = tuple(EvidenceFinding(expectation=k, status="INSUFFICIENT" if ok is None else "PASS" if ok else "FAIL",
                                      reason_code=code if ok else f"{code}_FAILED") for k, ok, code in checks)
     statuses = {f.status for f in findings}
     verdict = "FAIL" if "FAIL" in statuses else "INSUFFICIENT" if "INSUFFICIENT" in statuses else "PASS"
-    body = {"verdict": verdict, "findings": [f.model_dump() for f in findings], "evaluated_at": utcnow()}
-    return EvidenceValidationResult(**body, result_hash=stable_hash(body))
+    observed = utcnow()
+    material = {"contract_id": contract.contract_id, "contract_version": contract.version,
+                "verdict": verdict, "findings": [f.model_dump() for f in findings]}
+    return EvidenceValidationResult(verdict=verdict, findings=findings, evaluated_at=observed, result_hash=stable_hash(material))
 
 
 def admit(result: EvidenceValidationResult) -> EvidenceAdmissionResult:
@@ -65,9 +73,9 @@ def trust_manifest(manifest: MCPToolRiskManifest, current_version: int = 1,
     if rollback: reasons.append("VERSION_ROLLBACK")
     if conflict: reasons.append("SAME_VERSION_HASH_CONFLICT")
     verdict = "REJECT" if reasons else "ACCEPT"
-    body = dict(verdict=verdict, freshness_state="FRESH" if fresh else "STALE", rollback_state="ROLLBACK" if rollback else "MONOTONIC",
-                conflict_state="CONFLICT" if conflict else "NONE", reason_codes=tuple(reasons or ["TRUST_CHECKS_PASS"]), observed_at=utcnow())
-    return ReleaseTrustDecision(**body, decision_hash=stable_hash(body))
+    material = dict(verdict=verdict, freshness_state="FRESH" if fresh else "STALE", rollback_state="ROLLBACK" if rollback else "MONOTONIC",
+                    conflict_state="CONFLICT" if conflict else "NONE", reason_codes=tuple(reasons or ["TRUST_CHECKS_PASS"]))
+    return ReleaseTrustDecision(**material, observed_at=utcnow(), decision_hash=stable_hash(material))
 
 
 def grant_consent(session_id: str, owner_label: str, args: AppointmentArgs, ttl_minutes: int = 10) -> ConsentRecord:
@@ -78,12 +86,36 @@ def grant_consent(session_id: str, owner_label: str, args: AppointmentArgs, ttl_
         expires_at=(now+timedelta(minutes=ttl_minutes)).isoformat().replace("+00:00","Z"))
 
 
-def bind_action(consent: ConsentRecord, args: AppointmentArgs) -> BoundActionRef:
+def enforce_gate(admission: EvidenceAdmissionResult | None, trust: ReleaseTrustDecision | None) -> None:
+    if admission is None: raise ValueError("EVIDENCE_ADMISSION_MISSING")
+    if admission.verdict != "ADMIT": raise ValueError("EVIDENCE_NOT_ADMITTED:" + admission.verdict)
+    if trust is None: raise ValueError("TRUST_DECISION_MISSING")
+    if trust.verdict != "ACCEPT" or trust.freshness_state != "FRESH" or trust.rollback_state != "MONOTONIC" or trust.conflict_state != "NONE":
+        raise ValueError("RELEASE_NOT_TRUSTED:" + ":".join((trust.verdict, trust.freshness_state, trust.rollback_state, trust.conflict_state)))
+
+
+def bind_action(consent: ConsentRecord, args: AppointmentArgs, admission: EvidenceAdmissionResult | None = None,
+                trust: ReleaseTrustDecision | None = None) -> BoundActionRef:
+    enforce_gate(admission, trust)
     if datetime.fromisoformat(consent.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc): raise ValueError("CONSENT_EXPIRED")
+    if consent.tool_name != TOOL_NAME: raise ValueError("CONSENT_TOOL_MISMATCH")
     if stable_hash(args) != consent.arguments_hash: raise ValueError("MATERIAL_ARGUMENTS_CHANGED")
+    expected_action_hash=stable_hash({"tool":TOOL_NAME,"arguments_hash":consent.arguments_hash,"session_id":consent.session_id})
+    if consent.action_hash != expected_action_hash: raise ValueError("CONSENT_ACTION_HASH_INVALID")
     bid="action_"+stable_hash({"consent":consent.consent_id,"args":consent.arguments_hash})[:20]
     return BoundActionRef(bound_action_id=bid, consent_id=consent.consent_id, tool_name=TOOL_NAME,
-                          arguments_hash=consent.arguments_hash, idempotency_key=bid, expires_at=consent.expires_at)
+                          arguments_hash=consent.arguments_hash, idempotency_key=bid, expires_at=consent.expires_at,
+                          evidence_admission_ref=stable_hash(admission), trust_decision_ref=trust.decision_hash)
+
+
+def reconcile(desired_status: str, observed_status: str | None) -> ReconcileDecision:
+    if observed_status is None:
+        return ReconcileDecision(action="WAIT", desired_status=desired_status, observed_status=None, reason_codes=("OBSERVATION_MISSING",))
+    if observed_status not in {"HELD", "CANCELLED"}:
+        return ReconcileDecision(action="BLOCKED", desired_status=desired_status, observed_status=observed_status, reason_codes=("OBSERVATION_INVALID",))
+    if observed_status == desired_status:
+        return ReconcileDecision(action="NOOP", desired_status=desired_status, observed_status=observed_status, reason_codes=("DESIRED_STATE_OBSERVED",))
+    return ReconcileDecision(action="PROPOSE_OWNER_ACTION", desired_status=desired_status, observed_status=observed_status, reason_codes=("REVERSIBLE_STATE_DIVERGENCE",))
 
 
 def materiality_diff(approved: AppointmentArgs, proposed: AppointmentArgs) -> ToolArgumentMaterialityDiff:
